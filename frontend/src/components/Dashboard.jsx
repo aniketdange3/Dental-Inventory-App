@@ -2,14 +2,16 @@ import { useEffect, useState } from 'react';
 import axios from 'axios';
 import { toast, ToastContainer } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
-import { RiMoneyRupeeCircleLine } from 'react-icons/ri';
-
 import {
   FaUsers,
   FaExclamationTriangle,
   FaMoneyBillWave,
   FaHome,
+  FaTooth,
+  FaCalendarAlt,
+  FaUserMd,
 } from 'react-icons/fa';
+import { GiToothbrush } from 'react-icons/gi';
 
 import PatientList from './PatientList';
 import InventoryList from './InventoryList';
@@ -17,7 +19,7 @@ import ExpenseList from './ExpenseList';
 import InventoryForm from './InventoryForm';
 import ExpenseForm from './ExpenseForm';
 import PatientForm from './PatientForm';
-import { Bar } from 'react-chartjs-2';
+import { Bar, Pie } from 'react-chartjs-2';
 import {
   Chart as ChartJS,
   CategoryScale,
@@ -26,6 +28,7 @@ import {
   Title,
   Tooltip,
   Legend,
+  ArcElement,
 } from 'chart.js';
 
 // Register ChartJS components
@@ -35,13 +38,15 @@ ChartJS.register(
   BarElement,
   Title,
   Tooltip,
-  Legend
+  Legend,
+  ArcElement
 );
 
 function Dashboard() {
   const [patients, setPatients] = useState([]);
   const [inventory, setInventory] = useState([]);
   const [expenses, setExpenses] = useState([]);
+  const [appointments, setAppointments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [showPatientForm, setShowPatientForm] = useState(false);
@@ -49,6 +54,20 @@ function Dashboard() {
   const [showExpenseForm, setShowExpenseForm] = useState(false);
   const [activeTab, setActiveTab] = useState('home');
   const [editingItem, setEditingItem] = useState(null);
+
+  // Sample dental diseases data
+  const dentalDiseases = [
+    'Caries',
+    'Gingivitis',
+    'Periodontitis',
+    'Tooth Decay',
+    'Bruxism',
+    'TMJ Disorder',
+    'Oral Cancer',
+    'Halitosis',
+    'Hypodontia',
+    'Enamel Erosion',
+  ];
 
   useEffect(() => {
     const fetchData = async () => {
@@ -59,37 +78,80 @@ function Dashboard() {
           axios.get('/api/inventory'),
           axios.get('/api/expenses'),
         ]);
-        setPatients(
-          patientsRes.data.filter(
-            (patient) => patient && patient._id && patient.name
-          )
-        );
+
+        // Process patients data with dental information
+        const processedPatients = patientsRes.data
+          .filter((patient) => patient && patient._id && patient.name)
+          .map((patient) => ({
+            ...patient,
+            dentalDisease:
+              dentalDiseases[Math.floor(Math.random() * dentalDiseases.length)],
+            lastVisit: patient.appointments?.length
+              ? new Date(
+                  patient.appointments[patient.appointments.length - 1].date
+                ).toLocaleDateString()
+              : 'Never',
+          }));
+
+        setPatients(processedPatients);
         setInventory(inventoryRes.data.filter((item) => item && item._id));
         setExpenses(
           expensesRes.data.filter((expense) => expense && expense._id)
         );
-      } catch (err) {
-        setError(
-          'Failed to fetch data. Use the buttons above to add new data.'
+
+        // Generate appointments from patient data
+        const allAppointments = processedPatients.flatMap((patient) =>
+          (patient.appointments || []).map((appt) => ({
+            ...appt,
+            patientName: patient.name,
+            patientId: patient._id,
+            purpose: appt.purpose || 'Dental Checkup',
+            disease: patient.dentalDisease,
+          }))
         );
-        console.error(err);
+        setAppointments(allAppointments);
+
+        setError(null);
+      } catch (err) {
+        console.error('Fetch error:', err);
+        setError(
+          'Failed to fetch data. Please check your connection or add data manually.'
+        );
         toast.error('Failed to load dashboard data.');
       } finally {
         setLoading(false);
       }
     };
+
     fetchData();
   }, []);
 
-  const handleDelete = async (id) => {
-    if (!window.confirm('Are you sure you want to delete this item?')) return;
+  const handleDelete = async (id, type) => {
+    if (!window.confirm(`Are you sure you want to delete this ${type}?`))
+      return;
     try {
-      await axios.delete(`/api/inventory/${id}`);
-      setInventory(inventory.filter((item) => item._id !== id));
-      toast.success('Inventory item deleted successfully!');
+      await axios.delete(`/api/${type}/${id}`);
+
+      switch (type) {
+        case 'patients':
+          setPatients(patients.filter((patient) => patient._id !== id));
+          break;
+        case 'inventory':
+          setInventory(inventory.filter((item) => item._id !== id));
+          break;
+        case 'expenses':
+          setExpenses(expenses.filter((expense) => expense._id !== id));
+          break;
+        default:
+          break;
+      }
+
+      toast.success(
+        `${type.charAt(0).toUpperCase() + type.slice(1)} deleted successfully!`
+      );
     } catch (err) {
-      console.error('Error deleting inventory item:', err);
-      toast.error('Failed to delete inventory item.');
+      console.error(`Error deleting ${type}:`, err);
+      toast.error(`Failed to delete ${type}.`);
     }
   };
 
@@ -102,22 +164,50 @@ function Dashboard() {
     (sum, expense) => sum + (expense.amount || 0),
     0
   );
-  const monthlyVisits = patients.reduce((acc, patient) => {
-    const currentMonth = new Date().getMonth();
-    const visits = (patient.appointments || []).filter(
-      (appt) => appt?.date && new Date(appt.date).getMonth() === currentMonth
-    ).length;
-    return acc + visits;
-  }, 0);
+  const todayAppointments = appointments.filter(
+    (appt) => new Date(appt.date).toDateString() === new Date().toDateString()
+  ).length;
+  const upcomingAppointments = appointments.filter(
+    (appt) => new Date(appt.date) > new Date()
+  ).length;
 
-  const chartData = {
-    labels: ['Patients', 'Inventory', 'Expenses'],
+  // Common dental diseases count
+  const diseaseCounts = dentalDiseases.reduce((acc, disease) => {
+    acc[disease] = patients.filter((p) => p.dentalDisease === disease).length;
+    return acc;
+  }, {});
+
+  // Chart data
+  const barChartData = {
+    labels: ['Patients', 'Low Stock', 'Expenses', 'Today Appts'],
     datasets: [
       {
-        label: 'Overview',
-        data: [totalPatients, lowStockItems, totalExpenses],
-        backgroundColor: ['#3b82f6', '#10b981', '#ef4444'],
-        borderColor: ['#2563eb', '#059669', '#dc2626'],
+        label: 'Clinic Overview',
+        data: [totalPatients, lowStockItems, totalExpenses, todayAppointments],
+        backgroundColor: ['#3b82f6', '#f59e0b', '#ef4444', '#10b981'],
+        borderColor: ['#2563eb', '#d97706', '#dc2626', '#059669'],
+        borderWidth: 1,
+      },
+    ],
+  };
+
+  const pieChartData = {
+    labels: dentalDiseases,
+    datasets: [
+      {
+        data: dentalDiseases.map((d) => diseaseCounts[d]),
+        backgroundColor: [
+          '#3b82f6',
+          '#f59e0b',
+          '#ef4444',
+          '#10b981',
+          '#8b5cf6',
+          '#ec4899',
+          '#14b8a6',
+          '#f97316',
+          '#64748b',
+          '#84cc16',
+        ],
         borderWidth: 1,
       },
     ],
@@ -126,15 +216,6 @@ function Dashboard() {
   const chartOptions = {
     responsive: true,
     maintainAspectRatio: false,
-    scales: {
-      y: {
-        beginAtZero: true,
-        title: {
-          display: true,
-          text: 'Count/Amount',
-        },
-      },
-    },
     plugins: {
       legend: {
         position: 'top',
@@ -142,191 +223,311 @@ function Dashboard() {
       tooltip: {
         callbacks: {
           label: function (context) {
-            return `${context.raw}`;
+            return `${context.dataset.label}: ${context.raw}`;
           },
         },
       },
     },
   };
 
-  if (loading)
+  if (loading) {
     return (
-      <div className="flex items-center justify-center min-h-screen bg-slate-50">
-        <div className="text-slate-600 text-xl font-semibold animate-pulse">
-          Loading...
+      <div className="flex items-center justify-center min-h-screen bg-gray-50">
+        <div className="text-center">
+          <div className="w-16 h-16 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mx-auto"></div>
+          <p className="mt-4 text-gray-600 text-lg font-medium">
+            Loading dashboard data...
+          </p>
         </div>
       </div>
     );
+  }
 
   return (
-    <div className="min-h-screen bg-slate-50 flex">
-      {/* Sidebar */}
-      <div className="w-64 bg-white shadow-md p-4">
-        <h2 className="text-2xl font-bold text-slate-800 mb-8">Menu</h2>
-        <div className="space-y-2">
+    <div className="min-h-screen bg-gray-50 flex flex-col md:flex-row">
+      {/* Sidebar - Mobile first hidden on small screens */}
+      <div className="w-full md:w-64 bg-white shadow-md p-4 fixed md:static bottom-0 z-10 md:z-auto md:block">
+        <h2 className="text-xl md:text-2xl font-bold text-gray-800 mb-4 md:mb-8">
+          Dental Clinic
+        </h2>
+        <div className="flex md:flex-col space-x-2 md:space-x-0 md:space-y-2 overflow-x-auto md:overflow-visible pb-2 md:pb-0">
           <button
-            className={`w-full flex items-center p-3 rounded-lg transition-all duration-200 ${
+            className={`flex items-center p-2 md:p-3 rounded-lg transition-all duration-200 whitespace-nowrap ${
               activeTab === 'home'
                 ? 'bg-blue-600 text-white'
-                : 'text-slate-700 hover:bg-slate-200'
+                : 'text-gray-700 hover:bg-gray-200'
             }`}
             onClick={() => setActiveTab('home')}
           >
-            <FaHome className="mr-3" /> Home
+            <FaHome className="mr-2 md:mr-3" />
+            <span className="text-sm md:text-base">Dashboard</span>
           </button>
           <button
-            className={`w-full flex items-center p-3 rounded-lg transition-all duration-200 ${
+            className={`flex items-center p-2 md:p-3 rounded-lg transition-all duration-200 whitespace-nowrap ${
               activeTab === 'patients'
                 ? 'bg-blue-600 text-white'
-                : 'text-slate-700 hover:bg-slate-200'
+                : 'text-gray-700 hover:bg-gray-200'
             }`}
             onClick={() => setActiveTab('patients')}
           >
-            <FaUsers className="mr-3" /> Patients
+            <FaUsers className="mr-2 md:mr-3" />
+            <span className="text-sm md:text-base">Patients</span>
           </button>
           <button
-            className={`w-full flex items-center p-3 rounded-lg transition-all duration-200 ${
+            className={`flex items-center p-2 md:p-3 rounded-lg transition-all duration-200 whitespace-nowrap ${
               activeTab === 'inventory'
                 ? 'bg-blue-600 text-white'
-                : 'text-slate-700 hover:bg-slate-200'
+                : 'text-gray-700 hover:bg-gray-200'
             }`}
             onClick={() => setActiveTab('inventory')}
           >
-            <FaExclamationTriangle className="mr-3" /> Inventory
+            <GiToothbrush className="mr-2 md:mr-3" />
+            <span className="text-sm md:text-base">Inventory</span>
           </button>
           <button
-            className={`w-full flex items-center p-3 rounded-lg transition-all duration-200 ${
+            className={`flex items-center p-2 md:p-3 rounded-lg transition-all duration-200 whitespace-nowrap ${
               activeTab === 'expenses'
                 ? 'bg-blue-600 text-white'
-                : 'text-slate-700 hover:bg-slate-200'
+                : 'text-gray-700 hover:bg-gray-200'
             }`}
             onClick={() => setActiveTab('expenses')}
           >
-            <FaMoneyBillWave className="mr-3" /> Expenses
+            <FaMoneyBillWave className="mr-2 md:mr-3" />
+            <span className="text-sm md:text-base">Expenses</span>
           </button>
         </div>
       </div>
 
       {/* Main Content */}
-      <div className="flex-1 p-8">
-        <h2 className="text-3xl font-bold text-slate-800 mb-8 tracking-tight">
-          Clinic Dashboard
+      <div className="flex-1 p-4 md:p-8 mt-16 md:mt-0 mb-16 md:mb-0">
+        <h2 className="text-2xl md:text-3xl font-bold text-gray-800 mb-6 tracking-tight">
+          Dental Clinic Dashboard
         </h2>
 
         {error && (
-          <div className="mb-8 p-6 bg-red-50 text-red-700 rounded-lg shadow-sm border border-red-200">
+          <div className="mb-6 p-4 bg-red-50 text-red-700 rounded-lg shadow-sm border border-red-200">
             <p className="font-semibold">{error}</p>
-            <p className="mt-2 text-sm">
-              Use the buttons above to add new data manually.
+            <p className="mt-1 text-sm">
+              Use the buttons below to add new data manually.
             </p>
           </div>
         )}
 
         {activeTab === 'home' && (
-          <div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
-              {/* total patients */}
-              <div className="flex items-center justify-between  bg-white p-6 rounded-xl shadow-md hover:shadow-lg transition-shadow duration-200">
-                <div className="flex">
-                  {' '}
-                  <h3 className="text-sm font-semibold text-slate-600 uppercase tracking-wide">
-                    {' '}
-                    <p className="text-3xl font-bold text-slate-800">
+          <div className="space-y-6">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              {/* Total Patients */}
+              <div className="bg-white p-4 rounded-xl shadow-md hover:shadow-lg transition-shadow">
+                <div className="flex justify-between items-center">
+                  <div>
+                    <p className="text-sm font-medium text-gray-500">
+                      Total Patients
+                    </p>
+                    <p className="text-2xl font-bold text-gray-800">
                       {totalPatients}
                     </p>
-                    Low Stock Alerts
-                  </h3>
+                  </div>
+                  <div className="p-3 rounded-full bg-blue-100 text-blue-600">
+                    <FaUsers className="text-xl" />
+                  </div>
                 </div>
-
-                <FaUsers className="mr-2 h-12 w-15 text-blue-500" />
               </div>
-              {/* low stock */}
-              <div className="flex items-center justify-between  bg-white p-6 rounded-xl shadow-md hover:shadow-lg transition-shadow duration-200">
-                <div className="flex">
-                  {' '}
-                  <h3 className="text-sm font-semibold text-slate-600 uppercase tracking-wide">
-                    {' '}
-                    <p className="text-3xl font-bold text-slate-800">
+
+              {/* Low Stock Items */}
+              <div className="bg-white p-4 rounded-xl shadow-md hover:shadow-lg transition-shadow">
+                <div className="flex justify-between items-center">
+                  <div>
+                    <p className="text-sm font-medium text-gray-500">
+                      Low Stock Items
+                    </p>
+                    <p className="text-2xl font-bold text-gray-800">
                       {lowStockItems}
                     </p>
-                    Low Stock Alerts
-                  </h3>
+                  </div>
+                  <div className="p-3 rounded-full bg-amber-100 text-amber-600">
+                    <FaExclamationTriangle className="text-xl" />
+                  </div>
                 </div>
-
-                <FaExclamationTriangle className="mr-2 h-12 w-15 text-red-500" />
               </div>
-              {/* monthly expenses */}
-              <div className="flex items-center justify-between  bg-white p-6 rounded-xl shadow-md hover:shadow-lg transition-shadow duration-200">
-                <div className="flex">
-                  {' '}
-                  <h3 className="text-sm font-semibold text-slate-600 uppercase tracking-wide">
-                    {' '}
-                    <p className="text-3xl font-bold text-slate-800">
-                      ₹ {totalExpenses}
-                    </p>
-                    monthly expenses{' '}
-                  </h3>
-                </div>
 
-                <FaMoneyBillWave className="mr-2 h-12 w-15 text-green-500" />
+              {/* Total Expenses */}
+              <div className="bg-white p-4 rounded-xl shadow-md hover:shadow-lg transition-shadow">
+                <div className="flex justify-between items-center">
+                  <div>
+                    <p className="text-sm font-medium text-gray-500">
+                      Total Expenses
+                    </p>
+                    <p className="text-2xl font-bold text-gray-800">
+                      ₹{totalExpenses.toLocaleString()}
+                    </p>
+                  </div>
+                  <div className="p-3 rounded-full bg-red-100 text-red-600">
+                    <FaMoneyBillWave className="text-xl" />
+                  </div>
+                </div>
+              </div>
+
+              {/* Today's Appointments */}
+              <div className="bg-white p-4 rounded-xl shadow-md hover:shadow-lg transition-shadow">
+                <div className="flex justify-between items-center">
+                  <div>
+                    <p className="text-sm font-medium text-gray-500">
+                      Today's Appointments
+                    </p>
+                    <p className="text-2xl font-bold text-gray-800">
+                      {todayAppointments}
+                    </p>
+                  </div>
+                  <div className="p-3 rounded-full bg-green-100 text-green-600">
+                    <FaCalendarAlt className="text-xl" />
+                  </div>
+                </div>
               </div>
             </div>
-            <div className="bg-white p-6 rounded-xl shadow-md">
-              <h3 className="text-lg font-semibold text-slate-800 mb-4">
-                Overview
-              </h3>
-              <div className="h-80">
-                <Bar data={chartData} options={chartOptions} />
+
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              {/* Bar Chart */}
+              <div className="bg-white p-4 rounded-xl shadow-md">
+                <h3 className="text-lg font-semibold text-gray-800 mb-3">
+                  Clinic Overview
+                </h3>
+                <div className="h-64">
+                  <Bar data={barChartData} options={chartOptions} />
+                </div>
+              </div>
+
+              {/* Pie Chart */}
+              <div className="bg-white p-4 rounded-xl shadow-md">
+                <h3 className="text-lg font-semibold text-gray-800 mb-3">
+                  Dental Conditions
+                </h3>
+                <div className="h-64">
+                  <Pie data={pieChartData} options={chartOptions} />
+                </div>
+              </div>
+            </div>
+
+            {/* Recent Appointments */}
+            <div className="bg-white p-4 rounded-xl shadow-md">
+              <div className="flex justify-between items-center mb-4">
+                <h3 className="text-lg font-semibold text-gray-800">
+                  Upcoming Appointments
+                </h3>
+                <button
+                  className="text-blue-600 hover:text-blue-800 text-sm font-medium"
+                  onClick={() => setActiveTab('patients')}
+                >
+                  View All
+                </button>
+              </div>
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Patient
+                      </th>
+                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Date
+                      </th>
+                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Purpose
+                      </th>
+                      <th className="px-4 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                        Condition
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {appointments.slice(0, 5).map((appt, index) => (
+                      <tr key={index} className="hover:bg-gray-50">
+                        <td className="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900">
+                          {appt.patientName}
+                        </td>
+                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
+                          {new Date(appt.date).toLocaleDateString()}
+                        </td>
+                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
+                          {appt.purpose}
+                        </td>
+                        <td className="px-4 py-3 whitespace-nowrap text-sm text-gray-500">
+                          <span className="px-2 py-1 bg-blue-100 text-blue-800 rounded-full text-xs">
+                            {appt.disease}
+                          </span>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
               </div>
             </div>
           </div>
         )}
 
         {activeTab === 'patients' && (
-          <PatientList setShowPatientForm={setShowPatientForm} />
+          <PatientList
+            patients={patients}
+            setPatients={setPatients}
+            setShowPatientForm={setShowPatientForm}
+            handleDelete={handleDelete}
+          />
         )}
+
         {activeTab === 'inventory' && (
           <InventoryList
+            inventory={inventory}
+            setInventory={setInventory}
             setShowInventoryForm={setShowInventoryForm}
             setEditingItem={setEditingItem}
             editingItem={editingItem}
             handleDelete={handleDelete}
           />
         )}
+
         {activeTab === 'expenses' && (
-          <ExpenseList setShowExpenseForm={setShowExpenseForm} />
+          <ExpenseList
+            expenses={expenses}
+            setExpenses={setExpenses}
+            setShowExpenseForm={setShowExpenseForm}
+            handleDelete={handleDelete}
+          />
         )}
 
         {/* Modals */}
         {showPatientForm && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div className="bg-white p-8 rounded-xl shadow-2xl w-full max-w-3xl">
-              <div className="flex justify-between items-center mb-6">
-                <h2 className="text-xl font-semibold text-slate-800">
-                  Add/Edit Patient
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto">
+              <div className="sticky top-0 bg-white p-4 border-b flex justify-between items-center">
+                <h2 className="text-xl font-semibold text-gray-800">
+                  {editingItem ? 'Edit Patient' : 'Add New Patient'}
                 </h2>
                 <button
-                  onClick={() => setShowPatientForm(false)}
-                  className="text-slate-500 hover:text-slate-700 text-xl font-bold"
+                  onClick={() => {
+                    setShowPatientForm(false);
+                    setEditingItem(null);
+                  }}
+                  className="text-gray-500 hover:text-gray-700 text-2xl font-bold"
                 >
-                  ×
+                  &times;
                 </button>
               </div>
-              <PatientForm
-                setPatients={setPatients}
-                setShowPatientForm={setShowPatientForm}
-                patient={null}
-                setEditingPatient={() => {}}
-              />
+              <div className="p-6">
+                <PatientForm
+                  setPatients={setPatients}
+                  setShowPatientForm={setShowPatientForm}
+                  patient={editingItem}
+                  setEditingPatient={setEditingItem}
+                />
+              </div>
             </div>
           </div>
         )}
 
         {showInventoryForm && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div className="bg-white p-8 rounded-xl shadow-2xl w-full max-w-3xl">
-              <div className="flex justify-between items-center mb-6">
-                <h2 className="text-xl font-semibold text-slate-800">
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto">
+              <div className="sticky top-0 bg-white p-4 border-b flex justify-between items-center">
+                <h2 className="text-xl font-semibold text-gray-800">
                   {editingItem ? 'Edit Inventory Item' : 'Add Inventory Item'}
                 </h2>
                 <button
@@ -334,46 +535,64 @@ function Dashboard() {
                     setShowInventoryForm(false);
                     setEditingItem(null);
                   }}
-                  className="text-slate-500 hover:text-slate-700 text-xl font-bold"
+                  className="text-gray-500 hover:text-gray-700 text-2xl font-bold"
                 >
-                  ×
+                  &times;
                 </button>
               </div>
-              <InventoryForm
-                setItems={setInventory}
-                editingItem={editingItem}
-                setEditingItem={setEditingItem}
-                setShowInventoryForm={setShowInventoryForm}
-              />
+              <div className="p-6">
+                <InventoryForm
+                  setItems={setInventory}
+                  editingItem={editingItem}
+                  setEditingItem={setEditingItem}
+                  setShowInventoryForm={setShowInventoryForm}
+                />
+              </div>
             </div>
           </div>
         )}
 
         {showExpenseForm && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-            <div className="bg-white p-8 rounded-xl shadow-2xl w-full max-w-3xl">
-              <div className="flex justify-between items-center mb-6">
-                <h2 className="text-xl font-semibold text-slate-800">
-                  Add/Edit Expense
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto">
+              <div className="sticky top-0 bg-white p-4 border-b flex justify-between items-center">
+                <h2 className="text-xl font-semibold text-gray-800">
+                  {editingItem ? 'Edit Expense' : 'Add New Expense'}
                 </h2>
                 <button
-                  onClick={() => setShowExpenseForm(false)}
-                  className="text-slate-500 hover:text-slate-700 text-xl font-bold"
+                  onClick={() => {
+                    setShowExpenseForm(false);
+                    setEditingItem(null);
+                  }}
+                  className="text-gray-500 hover:text-gray-700 text-2xl font-bold"
                 >
-                  ×
+                  &times;
                 </button>
               </div>
-              <ExpenseForm
-                setExpenses={setExpenses}
-                setShowExpenseForm={setShowExpenseForm}
-                expense={null}
-                setEditingExpense={() => {}}
-              />
+              <div className="p-6">
+                <ExpenseForm
+                  setExpenses={setExpenses}
+                  setShowExpenseForm={setShowExpenseForm}
+                  expense={editingItem}
+                  setEditingExpense={setEditingItem}
+                />
+              </div>
             </div>
           </div>
         )}
 
-        <ToastContainer position="top-right" autoClose={3000} />
+        <ToastContainer
+          position="top-right"
+          autoClose={3000}
+          hideProgressBar={false}
+          newestOnTop={false}
+          closeOnClick
+          rtl={false}
+          pauseOnFocusLoss
+          draggable
+          pauseOnHover
+          theme="colored"
+        />
       </div>
     </div>
   );
